@@ -1,0 +1,149 @@
+DECLARE
+
+   l_id_tour NUMBER := NVL(TO_NUMBER(:P8_ID_TOUR), 281);
+    TYPE id_array_type IS TABLE OF ACTIVE_MEMBER.ID_AMEMBER%TYPE INDEX BY PLS_INTEGER;
+    l_id_array id_array_type;
+   l_clob_content CLOB;
+   v_par number;
+
+    
+   l_styles VARCHAR2(4000); -- Объявляем переменную для стилей
+   v_txt varchar2(32000);
+
+BEGIN
+   -- Получить участников
+
+
+   -- Создаем стили для таблиц
+   l_styles := '<style>' ||
+                'table { float: right; border-collapse: collapse; margin: auto; }
+                td { border: 1px solid black; padding: 5px; text-align: center; }
+                input[type=text] { width: 4ch; } 
+                .my_td {min-width: 50px; }
+                .nop_td {min-width: 50px; background-color: lightblue; color: transparent;}
+                  </style>';
+
+   -- Инициализируем содержимое CLOB стилями
+   l_clob_content :=l_clob_content || l_styles;
+
+
+ SELECT MAX(num_group) into v_par FROM active_member WHERE active_member.id_tour = l_id_tour;
+FOR j IN 1..v_par LOOP
+    SELECT id_amember
+   BULK COLLECT INTO l_id_array
+   FROM (
+      SELECT id_amember
+      FROM ACTIVE_MEMBER
+      WHERE ACTIVE_MEMBER.ID_TOUR = l_id_tour
+        AND num_group = j
+      ORDER BY RANG
+   );
+
+l_clob_content :=l_clob_content || '<h4>Група №'|| j ||'</h4><br><table><tr><td>N</td><td>FIO</td><td>CITY</td><td>Rang</td><td>game</td></tr>';
+for i in (
+   
+  with
+tab_start as
+(
+    select 
+      ab.id_battle,
+      ab.id_tour,
+      ab.id_mem1,
+      am_1.fio as fio1,
+      am_1.city as city1,
+      am_1.rang as rang1,
+      ab.result1,
+      ab.id_mem2,
+      am_2.fio as fio2,
+      am_2.city as city2,
+      am_2.rang as rang2,
+      ab.result2
+    from AMEMBER_BATTLE ab
+    join ACTIVE_MEMBER am_1 on am_1.id_tour = ab.id_tour and am_1.id_amember = ab.id_mem1
+    join ACTIVE_MEMBER am_2 on am_2.id_tour = ab.id_tour and am_2.id_amember = ab.id_mem2
+    where ab.id_tour = l_id_tour
+    and am_1.num_group = j
+    and am_2.num_group = j
+)
+,tab_mem_u as
+(
+ select 
+  id_mem_u,
+  fio_u,
+  row_number() over (partition by null order by fio_u) as rn
+ from (
+        select ID_MEM1 as id_mem_u, FIO1 as fio_u from tab_start
+        union
+        select ID_MEM2, FIO2 from tab_start
+      )
+)
+,tab_cross as
+(
+    select 
+      t1.ID_MEM_U as ID_MEM_U1, t1.FIO_U as FIO_U1, t1.RN as rn1,
+      t2.ID_MEM_U as ID_MEM_U2, t2.FIO_U as FIO_U2, t2.RN as rn2
+    from tab_mem_u t1
+    cross join tab_mem_u t2
+)
+--select * from tab_cross
+,tab_2 as
+(
+    select 
+    *
+    from tab_cross tc
+    left join tab_start ts on (ts.ID_MEM1 =  tc.id_mem_u1 and ts.ID_MEM2 =  tc.id_mem_u2) or (ts.ID_MEM1 =  tc.id_mem_u2 and ts.ID_MEM2 =  tc.id_mem_u1)
+)
+,tab_3 as
+(
+    select
+      max(ID_TOUR) over (partition by null) as ID_TOUR,
+      ID_BATTLE,
+    --
+      RN1, ID_MEM_U1, FIO_U1,
+      case when ID_MEM_U1 = ID_MEM1 then CITY1 else CITY2 end as CITY1,
+      case when ID_MEM_U1 = ID_MEM1 then rang1 else rang2 end as rang1,
+      case when ID_MEM_U1 = ID_MEM1 then RESULT1 else RESULT2 end as RESULT1,
+    --
+      RN2,
+      case when ID_MEM_U1 = ID_MEM1 then ID_MEM2 else ID_MEM1 end as ID_MEM2,
+      case when ID_MEM_U1 = ID_MEM1 then FIO2 else FIO1 end as FIO2,
+      case when ID_MEM_U1 = ID_MEM1 then RESULT2 else RESULT1 end as RESULT2
+    from tab_2
+)
+,tab_end as
+(
+    select 
+    --*
+    distinct
+    ID_TOUR, RN1,  ID_MEM_U1, FIO_U1, CITY1,rang1,
+    listagg(RN2 || ',' || RESULT1 || '/' || RESULT2 || ';') WITHIN GROUP (ORDER BY RN2) over (partition by rn1) as list_result 
+    from tab_3
+)
+select
+ ID_TOUR, RN1, ID_MEM_U1, FIO_U1, CITY1,rang1, LIST_RESULT
+from tab_end
+where CITY1 is not null
+order by rn1
+)
+loop
+
+  l_clob_content := l_clob_content || '<tr><td>' || i.RN1 || '</td><td>' || i.FIO_U1 || '</td><td>' || i.CITY1 || '</td><td>' || i.rang1 || '</td> ';
+  for ii in  1..l_id_array.count+1 LOOP     
+            if i.RN1 = ii then l_clob_content := l_clob_content || '<td class=''nop_td''>';
+            else
+           l_clob_content := l_clob_content || '<td class=''my_td''>';
+            end if;
+
+          l_clob_content := l_clob_content ||  SUBSTR(
+        i.LIST_RESULT,
+        INSTR(i.LIST_RESULT, ',', 1, ii) + 1, -- Начало после второй запятой
+        INSTR(i.LIST_RESULT, ';', 1, ii) - INSTR(i.LIST_RESULT, ',', 1, ii) - 1)  ||
+           '</td>';
+       END LOOP;
+l_clob_content := l_clob_content || '<tr>';
+end loop;
+l_clob_content := l_clob_content || '<table/><br>' ;
+end loop;
+RETURN l_clob_content;
+
+END;
